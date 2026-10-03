@@ -191,9 +191,8 @@ while True:
     # ==========================================
     if otro_robot:
         dist_robots = calcular_distancia(rob_x, rob_y, otro_robot["col"], otro_robot["row"])
-        # Si los robots se acercan a menos de 15 cm
-        if dist_robots < 15.0:
-            # El robot con el ID mayor (ej. 11) siempre le cede el paso al menor (ej. 10)
+        # Si los robots se acercan a menos de 7 cm
+        if dist_robots < 7.0:
             if MI_ARUCO_ID > otro_robot.get("id", 0):
                 movimiento.stop()
                 print(f"[LOG] ⚠️ Compañero muy cerca ({dist_robots:.1f}). Cediendo el paso...")
