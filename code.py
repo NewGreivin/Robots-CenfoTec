@@ -3,6 +3,7 @@ import wifi
 import json
 import os
 import math
+import espnow  # Importamos ESP-NOW para la comunicación
 import movimiento
 import sensor_ultrasonico
 import sensor_color
@@ -15,12 +16,76 @@ VISION_IP     = os.getenv("VISION_IP")
 VISION_PUERTO = int(os.getenv("VISION_PUERTO"))
 MI_ARUCO_ID   = int(os.getenv("MI_ARUCO_ID"))
 
-VELOCIDAD_NORMAL  = 0.28  # Velocidad controlada para máxima precisión
-VELOCIDAD_GIRO    = 0.20  # Giro suave y estable
-DISTANCIA_LLEGADA = 5.5   
-DISTANCIA_META    = 5.8   # Distancia exacta para la estación de depósito
+# ==========================================
+# CONFIGURACIÓN ESP-NOW
+# ==========================================
+PEER_MAC_STR = os.getenv("PEER_MAC", "FF:FF:FF:FF:FF:FF")
+CANAL_ESPNOW = 6
+
+try:
+    # Iniciar AP brevemente para fijar el canal Wi-Fi
+    wifi.radio.start_ap(" ", "", channel=CANAL_ESPNOW, max_connections=0)
+    wifi.radio.stop_ap()
+    
+    esp = espnow.ESPNow()
+    
+    def mac_from_string(mac_string):
+        return bytes(int(part, 16) for part in mac_string.split(":"))
+        
+    peer_mac_bytes = mac_from_string(PEER_MAC_STR)
+    peer = espnow.Peer(mac=peer_mac_bytes, channel=CANAL_ESPNOW)
+    esp.peers.append(peer)
+    
+    mi_mac = ":".join("{:02X}".format(b) for b in wifi.radio.mac_address)
+    print(f"ESP-NOW Listo. Mi MAC: {mi_mac}")
+    print(f"Emparejado con robot: {PEER_MAC_STR}")
+except Exception as e:
+    print("Error iniciando ESP-NOW:", e)
+    esp = None
+
+# Variables para guardar lo que nos dice el otro robot
+estado_otro_robot = "DESCONOCIDO"
+objetivo_otro_robot = None  # Guardará (x, y) del cubo al que va el otro robot
+
+def enviar_mensaje_espnow(comando, datos):
+    if esp is None: return
+    msg = f"{MI_ARUCO_ID}|{comando}|{datos}"
+    try:
+        esp.send(msg.encode("utf-8"), peer)
+    except:
+        pass
+
+def procesar_mensajes_espnow():
+    global estado_otro_robot, objetivo_otro_robot
+    if esp is None: return
+    
+    while True:
+        packet = esp.read()
+        if packet is None: break
+        try:
+            msg = packet.msg.decode("utf-8")
+            partes = msg.split("|")
+            if len(partes) >= 3:
+                sender_id = partes[0]
+                comando = partes[1]
+                datos = partes[2]
+                
+                if comando == "TARGET":
+                    coords = datos.split(",")
+                    objetivo_otro_robot = (float(coords[0]), float(coords[1]))
+                elif comando == "STATE":
+                    estado_otro_robot = datos
+        except Exception:
+            pass
+# ==========================================
+
+VELOCIDAD_NORMAL  = 0.28
+VELOCIDAD_GIRO    = 0.20
+DISTANCIA_LLEGADA = 5.5
+DISTANCIA_META    = 5.8
 
 estado_robot      = "BUSCANDO_CUBO"
+estado_anterior   = "" # Para enviar actualización solo cuando cambiamos de fase
 color_cubo_actual = None
 
 vision = ClienteVision(VISION_IP, VISION_PUERTO)
@@ -42,17 +107,13 @@ def calcular_distancia(x1, y1, x2, y2):
 
 def diferencia_angulo(actual, deseado):
     diff = deseado - actual
-    while diff > 180:
-        diff -= 360
-    while diff < -180:
-        diff += 360
+    while diff > 180: diff -= 360
+    while diff < -180: diff += 360
     return diff
 
 def cubo_esta_en_posicion(cubo, depositos):
-    """Retorna True solo si el cubo está exactamente en el centro de su estación."""
     for dep in depositos:
         if dep.get("color") == cubo.get("color"):
-            # Reducido de 7.0 a 4.2 para que un cubo mal puesto o desviado NO se dé por bueno
             if calcular_distancia(cubo["col"], cubo["row"], dep["col"], dep["row"]) < 4.2:
                 return True
     return False
@@ -68,16 +129,12 @@ def navegar_hacia(rob_x, rob_y, rob_ang, dest_x, dest_y, es_meta=False):
     angulo_deseado = calcular_angulo_hacia(rob_x, rob_y, dest_x, dest_y)
     diff = diferencia_angulo(rob_ang, angulo_deseado)
 
-    # Si la diferencia de ángulo es notable, gira suavemente sin dar vueltas bruscas
     if abs(diff) > 15:
         sentido = 1 if diff > 0 else -1
         movimiento.girar(VELOCIDAD_GIRO * sentido)
         movimiento.ib.pixel = (255, 165, 0)
     else:
-        # Corrección proporcional suave para avanzar derecho al objetivo
-
         velocidad_actual = 0.20 if es_meta else VELOCIDAD_NORMAL
-
         Kp = 0.010
         correccion = diff * Kp
         motor_izq = max(0.1, min(1.0, VELOCIDAD_NORMAL - correccion))
@@ -90,6 +147,14 @@ def navegar_hacia(rob_x, rob_y, rob_ang, dest_x, dest_y, es_meta=False):
     return False
 
 while True:
+    # Leer mensajes de radio que hayan llegado
+    procesar_mensajes_espnow()
+    
+    # Avisar al otro robot si cambiamos de estado
+    if estado_robot != estado_anterior:
+        enviar_mensaje_espnow("STATE", estado_robot)
+        estado_anterior = estado_robot
+
     estado = vision.leer_ultimo_estado()
 
     if not estado:
@@ -99,15 +164,17 @@ while True:
     fase = estado.get("phase")
     if fase != "RUNNING":
         movimiento.stop()
-        print(f"Esperando... Fase actual: {fase}")
         time.sleep(0.1)
         continue
 
     mi_robot = None
+    otro_robot = None
+    
     for r in estado.get("rovers", []):
         if r.get("id") == MI_ARUCO_ID:
             mi_robot = r
-            break
+        else:
+            otro_robot = r
 
     if not mi_robot:
         movimiento.stop()
@@ -119,6 +186,19 @@ while True:
     rob_y   = mi_robot["row"]
     rob_ang = mi_robot["theta"]
 
+    # ==========================================
+    # EVASIÓN FÍSICA DE COLISIONES
+    # ==========================================
+    if otro_robot:
+        dist_robots = calcular_distancia(rob_x, rob_y, otro_robot["col"], otro_robot["row"])
+        # Si los robots se acercan a menos de 7 cm
+        if dist_robots < 7.0:
+            if MI_ARUCO_ID > otro_robot.get("id", 0):
+                movimiento.stop()
+                print(f"[LOG] ⚠️ Compañero muy cerca ({dist_robots:.1f}). Cediendo el paso...")
+                time.sleep(0.3)
+                continue
+
     cubos_vivos     = estado.get("cubes", [])
     depositos_vivos = estado.get("depots", [])
 
@@ -126,11 +206,16 @@ while True:
     # FASE 1: BUSCANDO CUBOS FUERA DE POSICIÓN
     # ==========================================
     if estado_robot == "BUSCANDO_CUBO":
-        # Filtramos y tomamos solo los cubos que NO están en su posición correcta
         cubos_pendientes = [c for c in cubos_vivos if not cubo_esta_en_posicion(c, depositos_vivos)]
 
+        # Descartar el cubo que el otro robot ya está persiguiendo
+        if objetivo_otro_robot is not None and estado_otro_robot in ["BUSCANDO_CUBO", "TOMANDO_CUBO"]:
+            cubos_pendientes = [
+                c for c in cubos_pendientes 
+                if calcular_distancia(c["col"], c["row"], objetivo_otro_robot[0], objetivo_otro_robot[1]) > 4.0
+            ]
+
         if not cubos_pendientes:
-            print("[LOG] 🎉 ¡JUEGO TERMINADO! Todos los cubos están en su posición correcta.")
             estado_robot = "JUEGO_TERMINADO"
             continue
 
@@ -145,12 +230,13 @@ while True:
 
         dest_x = cubo_cercano["col"]
         dest_y = cubo_cercano["row"]
-        print(f"[LOG] [BÚSQUEDA] Dirigiéndose al cubo fuera de posición en ({dest_x:.1f},{dest_y:.1f}) | Dist: {dist_minima:.1f}")
+        
+        # Avisar al compañero por ESP-NOW que vamos a ir por ESTE cubo específico
+        enviar_mensaje_espnow("TARGET", f"{dest_x:.1f},{dest_y:.1f}")
 
         llegue = navegar_hacia(rob_x, rob_y, rob_ang, dest_x, dest_y)
         if llegue:
             movimiento.stop()
-            print("[LOG] [CAPTURA] Posición del cubo alcanzada. Avanzando para asegurar en brazos...")
             estado_robot = "TOMANDO_CUBO"
 
     # ==========================================
@@ -160,7 +246,7 @@ while True:
         t0 = time.monotonic()
         while True:
             dist_fisica = sensor_ultrasonico.medir_distancia()
-            if dist_fisica <= 3.8:  # Rango óptimo de sujeción en tenazas
+            if dist_fisica <= 3.8:
                 movimiento.stop()
                 break
             movimiento.avanzar(0.12)
@@ -169,7 +255,6 @@ while True:
                 break
 
         time.sleep(0.1)
-        print("[LOG] [IDENTIFICACIÓN] Tomando muestras del sensor de color...")
 
         muestras_validas = []
         for _ in range(4):
@@ -181,12 +266,14 @@ while True:
         color_detectado = max(set(muestras_validas), key=muestras_validas.count) if muestras_validas else "red"
         color_cubo_actual = color_detectado
         
-        print(f"[LOG] [ÉXITO] Cubo identificado correctamente como: {color_cubo_actual.upper()}. Activando LED y transportando.")
         sensor_color.encender_led_permanente(color_cubo_actual)
+        
+        # Ya tomamos el cubo, limpiamos el objetivo para que el otro robot sepa que ya no está en el piso
+        enviar_mensaje_espnow("TARGET", "0.0,0.0")
         estado_robot = "LLEVANDO_A_ESTACION"
 
     # ==========================================
-    # FASE 3: TRANSPORTE A LA ESTACIÓN CORRESPONDIENTE
+    # FASE 3: TRANSPORTE A LA ESTACIÓN
     # ==========================================
     elif estado_robot == "LLEVANDO_A_ESTACION":
         deposito = None
@@ -196,39 +283,29 @@ while True:
                 break
 
         if deposito is None:
-            print(f"[LOG] [ERROR] No se encuentra la estación de depósito para el color '{color_cubo_actual}'.")
             time.sleep(0.2)
             continue
 
         dest_x = deposito["col"]
         dest_y = deposito["row"]
-        distancia = calcular_distancia(rob_x, rob_y, dest_x, dest_y)
-        print(f"[LOG] [TRANSPORTE] Llevando cubo {color_cubo_actual} a su estación | Distancia restante: {distancia:.1f}")
-
         llegue = navegar_hacia(rob_x, rob_y, rob_ang, dest_x, dest_y, es_meta=True)
 
         if llegue:
             movimiento.stop()
-            print("[LOG] [ENTREGA] Estación correcta alcanzada. Soltando cubo en su espacio...")
-            
-            # Retroceso limpio y preciso para dejar el cubo en su lugar sin arrastrarlo
             movimiento.retroceder(0.25)
             time.sleep(0.9)
             movimiento.stop()
             
             sensor_color.apagar_led()
-            print("[LOG] ✓ Cubo entregado con éxito. Buscando siguiente objetivo...")
-            
             color_cubo_actual = None
             estado_robot = "BUSCANDO_CUBO"
 
     # ==========================================
-    # FASE 4: JUEGO TERMINADO (BLOQUEO FINAL)
+    # FASE 4: JUEGO TERMINADO
     # ==========================================
     elif estado_robot == "JUEGO_TERMINADO":
         movimiento.stop()
         sensor_color.apagar_led()
-        print("[LOG] Misión completada satisfactoriamente. Todos los cubos están en posición.")
         while True:
             movimiento.stop()
             time.sleep(1)
