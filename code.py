@@ -83,6 +83,7 @@ VELOCIDAD_NORMAL  = 0.28
 VELOCIDAD_GIRO    = 0.20
 DISTANCIA_LLEGADA = 5.5   
 DISTANCIA_META    = 10.0
+DISTANCIA_COLISION = 7.0
 
 estado_robot      = "BUSCANDO_CUBO"
 estado_anterior   = "" # Para enviar actualización solo cuando cambiamos de fase
@@ -192,7 +193,7 @@ while True:
     if otro_robot:
         dist_robots = calcular_distancia(rob_x, rob_y, otro_robot["col"], otro_robot["row"])
         # Si los robots se acercan a menos de 7 cm
-        if dist_robots < 7.0:
+        if dist_robots < DISTANCIA_COLISION:
             if MI_ARUCO_ID > otro_robot.get("id", 0):
                 movimiento.stop()
                 print(f"[LOG] ⚠️ Compañero muy cerca ({dist_robots:.1f}). Cediendo el paso...")
