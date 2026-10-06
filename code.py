@@ -10,11 +10,43 @@ import sensor_color
 from vision_client import ClienteVision
 
 print("=== INICIANDO ROBOT AUTÓNOMO (PRECISIÓN Y FLUJO COMPLETO) ===")
-print("Wi-Fi Listo. IP del robot:", wifi.radio.ipv4_address)
 
+WIFI_SSID     = os.getenv("CIRCUITPY_WIFI_SSID")
+WIFI_PASSWORD = os.getenv("CIRCUITPY_WIFI_PASSWORD")
 VISION_IP     = os.getenv("VISION_IP")
 VISION_PUERTO = int(os.getenv("VISION_PUERTO"))
 MI_ARUCO_ID   = int(os.getenv("MI_ARUCO_ID"))
+
+def conectar_wifi(reintentos=10, pausa=5):
+    if not WIFI_SSID or not WIFI_PASSWORD:
+        raise RuntimeError(
+            "Faltan CIRCUITPY_WIFI_SSID o CIRCUITPY_WIFI_PASSWORD en settings.toml"
+        )
+
+    for intento in range(1, reintentos + 1):
+        if wifi.radio.connected:
+            print("Wi-Fi conectado. IP del robot:", wifi.radio.ipv4_address)
+            return True
+
+        try:
+            print(f"Conectando a Wi-Fi '{WIFI_SSID}' ({intento}/{reintentos})...")
+            wifi.radio.connect(WIFI_SSID, WIFI_PASSWORD)
+            print("Wi-Fi conectado. IP del robot:", wifi.radio.ipv4_address)
+            return True
+        except Exception as e:
+            print(f"No se pudo conectar al Wi-Fi: {e}")
+            if intento < reintentos:
+                time.sleep(pausa)
+
+    raise RuntimeError(
+        f"No fue posible conectar a la red Wi-Fi '{WIFI_SSID}'. "
+        "Verifique SSID, contraseña y que la red sea de 2.4 GHz."
+    )
+
+conectar_wifi()
+
+if not VISION_IP:
+    raise RuntimeError("Falta VISION_IP en settings.toml")
 
 # ==========================================
 # CONFIGURACIÓN ESP-NOW
@@ -81,9 +113,9 @@ def procesar_mensajes_espnow():
 
 VELOCIDAD_NORMAL  = 0.28
 VELOCIDAD_GIRO    = 0.20
-DISTANCIA_LLEGADA = 5.5
+DISTANCIA_LLEGADA = 5.5   
 DISTANCIA_META    = 7.0
-DISTANCIA_COLISION = 7.0
+DISTANCIA_COLISION = 10.0
 
 estado_robot      = "BUSCANDO_CUBO"
 estado_anterior   = "" # Para enviar actualización solo cuando cambiamos de fase
@@ -92,6 +124,10 @@ color_cubo_actual = None
 vision = ClienteVision(VISION_IP, VISION_PUERTO)
 
 while not vision.conectar(reintentos=5, pausa=3):
+    print(
+        f"No responde el servidor de vision en {VISION_IP}:{VISION_PUERTO}. "
+        "Confirme que el servidor esta encendido y que la IP coincide con la PC."
+    )
     print("Reintentando conexion con la vision en 5 segundos...")
     time.sleep(5)
 
