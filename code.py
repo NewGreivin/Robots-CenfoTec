@@ -111,10 +111,10 @@ def procesar_mensajes_espnow():
             pass
 # ==========================================
 
-VELOCIDAD_NORMAL  = 0.28
-VELOCIDAD_GIRO    = 0.20
-DISTANCIA_LLEGADA = 5.5   
-DISTANCIA_META    = 7.0
+VELOCIDAD_NORMAL  = 0.18
+VELOCIDAD_GIRO    = 0.16
+DISTANCIA_LLEGADA = 5.5  
+DISTANCIA_META    = 2.5
 DISTANCIA_COLISION = 10.0
 
 estado_robot      = "BUSCANDO_CUBO"
