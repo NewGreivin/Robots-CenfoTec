@@ -13,8 +13,17 @@ class ClienteVision:
         self.buffer_bytes = bytearray(512)  # Reducido para ahorrar RAM
         self.conectado    = False
 
-    def conectar(self, reintentos=10, pausa=3):
+    def _cerrar_socket(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+        self.sock = None
         self.conectado = False
+
+    def conectar(self, reintentos=10, pausa=3):
+        self._cerrar_socket()
         for intento in range(1, reintentos + 1):
             try:
                 print(f"Intento {intento}/{reintentos} conectando a {self.ip}:{self.puerto}...")
@@ -26,14 +35,11 @@ class ClienteVision:
                 self.buffer_str = "" # Limpiar al conectar
                 print("Conectado a la vision!")
                 return True
-            except Exception as e:
-                print(f"Fallo: {e}. Reintentando en {pausa}s...")
-                try:
-                    self.sock.close()
-                except:
-                    pass
-                self.sock = None
-                time.sleep(pausa)
+            except OSError as e:
+                print(f"Fallo de red: {e}. Reintentando en {pausa}s...")
+                self._cerrar_socket()
+                if intento < reintentos:
+                    time.sleep(pausa)
         print("No se pudo conectar a la vision.")
         return False
 
@@ -47,8 +53,7 @@ class ClienteVision:
                 num_bytes = self.sock.recv_into(self.buffer_bytes)
                 if num_bytes == 0:
                     print("Conexion con vision perdida.")
-                    self.conectado = False
-                    self.sock = None
+                    self._cerrar_socket()
                     return None
                 
                 # Evitar desbordamiento de memoria limitando el tamaño del búfer acumulado
