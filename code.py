@@ -111,10 +111,10 @@ def procesar_mensajes_espnow():
             pass
 # ==========================================
 
-VELOCIDAD_NORMAL  = 0.18
+VELOCIDAD_NORMAL  = 0.22
 VELOCIDAD_GIRO    = 0.16
 DISTANCIA_LLEGADA = 5.5  
-DISTANCIA_META    = 2.5
+DISTANCIA_META    = 8.5
 DISTANCIA_COLISION = 10.0
 
 estado_robot      = "BUSCANDO_CUBO"
@@ -158,7 +158,7 @@ def cubo_esta_en_posicion(cubo, depositos):
 def navegar_hacia(rob_x, rob_y, rob_ang, dest_x, dest_y, es_meta=False):
     distancia_limite = DISTANCIA_META if es_meta else DISTANCIA_LLEGADA
     distancia = calcular_distancia(rob_x, rob_y, dest_x, dest_y)
-    
+
     if distancia <= distancia_limite:
         movimiento.stop()
         return True
@@ -171,11 +171,16 @@ def navegar_hacia(rob_x, rob_y, rob_ang, dest_x, dest_y, es_meta=False):
         movimiento.girar(VELOCIDAD_GIRO * sentido)
         movimiento.ib.pixel = (255, 165, 0)
     else:
-        velocidad_actual = 0.20 if es_meta else VELOCIDAD_NORMAL
+        # FRENADO PROGRESIVO: Si va a la meta, reduce la velocidad automáticamente según se acerca
+        if es_meta:
+            velocidad_base = max(0.12, min(VELOCIDAD_NORMAL, distancia * 0.025))
+        else:
+            velocidad_base = VELOCIDAD_NORMAL
+
         Kp = 0.010
         correccion = diff * Kp
-        motor_izq = max(0.1, min(1.0, VELOCIDAD_NORMAL - correccion))
-        motor_der = max(0.1, min(1.0, VELOCIDAD_NORMAL + correccion))
+        motor_izq = max(0.1, min(1.0, velocidad_base - correccion))
+        motor_der = max(0.1, min(1.0, velocidad_base + correccion))
 
         movimiento.ib.motor_1.throttle = motor_izq
         movimiento.ib.motor_2.throttle = motor_der
